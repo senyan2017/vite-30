@@ -28,10 +28,11 @@ const argv = mri<{
   overwrite?: boolean
   immediate?: boolean
   interactive?: boolean
+  packageManager?: string
 }>(process.argv.slice(2), {
   boolean: ['help', 'overwrite', 'immediate', 'interactive'],
   alias: { h: 'help', t: 'template', i: 'immediate' },
-  string: ['template'],
+  string: ['template', 'package-manager'],
 })
 const cwd = process.cwd()
 
@@ -47,6 +48,9 @@ Options:
   -i, --immediate / --no-immediate      install dependencies and start dev
   --overwrite                           remove existing files if target directory is not empty
   --interactive / --no-interactive      force interactive / non-interactive mode
+  --package-manager NAME                explicitly specify package manager (npm, pnpm, yarn, bun, deno)
+                                        affects install commands, run commands, custom starter commands,
+                                        and done message output. If not set, auto-detects from environment.
   -h, --help                            display this help message
 
 Available templates:
@@ -389,6 +393,13 @@ const TEMPLATES = FRAMEWORKS.map((f) => f.variants.map((v) => v.name)).reduce(
   [],
 )
 
+export const VALID_PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'bun', 'deno'] as const
+export type PackageManager = (typeof VALID_PACKAGE_MANAGERS)[number]
+
+export function isValidPackageManager(value: string): value is PackageManager {
+  return (VALID_PACKAGE_MANAGERS as readonly string[]).includes(value)
+}
+
 const renameFiles: Record<string, string | undefined> = {
   _gitignore: '.gitignore',
 }
@@ -442,11 +453,24 @@ async function init() {
   const argOverwrite = argv.overwrite
   const argImmediate = argv.immediate
   const argInteractive = argv.interactive
+  const argPackageManager = argv['package-manager'] as string | undefined
 
   const help = argv.help
   if (help) {
     console.log(helpMessage)
     return
+  }
+
+  // Validate --package-manager early so we fail fast on invalid values
+  if (argPackageManager !== undefined && !isValidPackageManager(argPackageManager)) {
+    console.error(
+      `${red(
+        `Invalid package manager: "${argPackageManager}".`,
+      )}\n` +
+        `Valid options are: ${VALID_PACKAGE_MANAGERS.join(', ')}.\n` +
+        `Example: create-vite my-app --package-manager pnpm`,
+    )
+    process.exit(1)
   }
 
   const interactive = argInteractive ?? process.stdin.isTTY
@@ -459,7 +483,24 @@ async function init() {
     )
   }
 
-  const pkgInfo = pkgFromUserAgent(process.env.npm_config_user_agent)
+  const detectedPkgInfo = pkgFromUserAgent(process.env.npm_config_user_agent)
+
+  // If --package-manager is explicitly provided, use it (override auto-detection).
+  // Preserve detected version when the explicit name matches the detected agent,
+  // so yarn 1.x detection still works when user passes --package-manager yarn.
+  let pkgInfo: PkgInfo | undefined
+  if (argPackageManager) {
+    pkgInfo = {
+      name: argPackageManager,
+      version:
+        detectedPkgInfo && detectedPkgInfo.name === argPackageManager
+          ? detectedPkgInfo.version
+          : '',
+    }
+  } else {
+    pkgInfo = detectedPkgInfo
+  }
+
   const cancel = () => prompts.cancel('Operation cancelled')
 
   // 1. Get project name and target dir
@@ -756,12 +797,12 @@ function emptyDir(dir: string) {
   }
 }
 
-interface PkgInfo {
+export interface PkgInfo {
   name: string
   version: string
 }
 
-function pkgFromUserAgent(userAgent: string | undefined): PkgInfo | undefined {
+export function pkgFromUserAgent(userAgent: string | undefined): PkgInfo | undefined {
   if (!userAgent) return undefined
   const pkgSpec = userAgent.split(' ')[0]
   const pkgSpecArr = pkgSpec.split('/')
@@ -842,7 +883,7 @@ function editFile(file: string, callback: (content: string) => string) {
   fs.writeFileSync(file, callback(content), 'utf-8')
 }
 
-function getFullCustomCommand(customCommand: string, pkgInfo?: PkgInfo) {
+export function getFullCustomCommand(customCommand: string, pkgInfo?: PkgInfo) {
   const pkgManager = pkgInfo ? pkgInfo.name : 'npm'
   const isYarn1 = pkgManager === 'yarn' && pkgInfo?.version.startsWith('1.')
 
@@ -903,14 +944,14 @@ function getLabel(variant: FrameworkVariant) {
   return label
 }
 
-function getInstallCommand(agent: string) {
+export function getInstallCommand(agent: string) {
   if (agent === 'yarn') {
     return [agent]
   }
   return [agent, 'install']
 }
 
-function getRunCommand(agent: string, script: string) {
+export function getRunCommand(agent: string, script: string) {
   switch (agent) {
     case 'yarn':
     case 'pnpm':

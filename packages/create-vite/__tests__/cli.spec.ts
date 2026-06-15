@@ -258,3 +258,83 @@ test('accepts immediate flag and skips install prompt', () => {
   expect(stdout).not.toContain('Installing dependencies')
   expect(stdout).toContain(`Scaffolding project in ${genPath}`)
 })
+
+test('help message includes --package-manager option', () => {
+  const { stdout } = run(['--help'], { cwd: import.meta.dirname })
+  expect(stdout).toContain('--package-manager NAME')
+  expect(stdout).toContain('npm, pnpm, yarn, bun, deno')
+})
+
+test('rejects invalid --package-manager value with clear error', () => {
+  try {
+    run([projectName, '--package-manager', 'cargo'], {
+      cwd: import.meta.dirname,
+    })
+    expect.unreachable('should have thrown')
+  } catch (e: any) {
+    expect(e.stderr || e.stdout || e.message).toContain(
+      'Invalid package manager: "cargo"',
+    )
+    expect(e.stderr || e.stdout || e.message).toContain(
+      'Valid options are: npm, pnpm, yarn, bun, deno',
+    )
+  }
+})
+
+test('--package-manager pnpm shows pnpm commands in done message', () => {
+  const { stdout } = run(
+    [projectName, '--template', 'vue', '--no-immediate', '--package-manager', 'pnpm'],
+    { cwd: import.meta.dirname },
+  )
+  expect(stdout).toContain('pnpm install')
+  expect(stdout).toContain('pnpm dev')
+})
+
+test('--package-manager yarn shows yarn commands in done message', () => {
+  const { stdout } = run(
+    [projectName, '--template', 'vue', '--no-immediate', '--package-manager', 'yarn'],
+    { cwd: import.meta.dirname },
+  )
+  expect(stdout).toContain('yarn\n')  // yarn install is just `yarn`
+  expect(stdout).toContain('yarn dev')
+})
+
+test('--package-manager bun shows bun commands in done message', () => {
+  const { stdout } = run(
+    [projectName, '--template', 'vue', '--no-immediate', '--package-manager', 'bun'],
+    { cwd: import.meta.dirname },
+  )
+  expect(stdout).toContain('bun install')
+  expect(stdout).toContain('bun dev')
+})
+
+test('--package-manager deno shows deno commands in done message', () => {
+  const { stdout } = run(
+    [projectName, '--template', 'vue', '--no-immediate', '--package-manager', 'deno'],
+    { cwd: import.meta.dirname },
+  )
+  expect(stdout).toContain('deno install')
+  expect(stdout).toContain('deno task dev')
+})
+
+test('--package-manager with --immediate uses specified package manager for install', () => {
+  const { stdout } = run(
+    [projectName, '--template', 'vue', '--immediate', '--package-manager', 'pnpm'],
+    { cwd: import.meta.dirname },
+  )
+  expect(stdout).toContain('Installing dependencies with pnpm')
+})
+
+test('--package-manager overrides npm_config_user_agent', () => {
+  const { stdout } = run(
+    [projectName, '--template', 'vue', '--no-immediate', '--package-manager', 'pnpm'],
+    {
+      cwd: import.meta.dirname,
+      env: { ...process.env, _VITE_TEST_CLI: 'true', npm_config_user_agent: 'npm/10.0.0 node/v20.0.0' },
+    },
+  )
+  // Even though npm_config_user_agent says npm, explicit --package-manager pnpm should win
+  expect(stdout).toContain('pnpm install')
+  expect(stdout).toContain('pnpm dev')
+  expect(stdout).not.toContain('npm install')
+})
