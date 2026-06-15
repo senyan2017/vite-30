@@ -149,7 +149,18 @@ export function createWebSocketServer(
   const wsOptions = isObject(config.server.ws) ? config.server.ws : undefined
   const wsCustomServer = wsOptions?.server
   const wsPort = wsOptions?.port
-  // TODO: the main server port may not have been chosen yet as it may use the next available
+  // The main HTTP server port may not be final yet — it can change when
+  // `server.port` is 0 (random port) or when the requested port is occupied
+  // and `strictPort` is false (auto-increment to next available port).
+  //
+  // Sharing the HTTP server with WS is safe when:
+  //   - No explicit `ws.port` is configured (WS follows HTTP server's port)
+  //   - `ws.port` matches `server.port` (user intends same-port sharing;
+  //     the actual port is whatever the HTTP server ends up on)
+  //
+  // When the WS shares the HTTP server, the client-side injection uses
+  // `importMetaUrl.port` as fallback, ensuring it always connects to the
+  // real listening port regardless of port auto-selection.
   const portsAreCompatible = !wsPort || wsPort === config.server.port
   const wsServer = wsCustomServer || (portsAreCompatible && server)
   let hmrServerWsListener: (

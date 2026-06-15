@@ -73,10 +73,7 @@ async function createClientConfigValueReplacer(
 ): Promise<(code: string) => string> {
   const resolvedServerHostname = (await resolveHostname(config.server.host))
     .name
-  const resolvedServerPort = config.server.port!
   const devBase = config.base
-
-  const serverHost = `${resolvedServerHostname}:${resolvedServerPort}${devBase}`
 
   const wsConfig = isObject(config.server.ws) ? config.server.ws : undefined
   const host = wsConfig?.host || null
@@ -88,43 +85,79 @@ async function createClientConfigValueReplacer(
   const hmrConfig = isObject(config.server.hmr) ? config.server.hmr : undefined
   const overlay = hmrConfig?.overlay !== false
 
-  // ws.clientPort -> ws.port
-  // -> (24678 if middleware mode and WS server is not specified) -> new URL(import.meta.url).port
-  let port = wsConfig?.clientPort || wsConfig?.port || null
-  if (config.server.middlewareMode && !isWsServerSpecified) {
-    port ||= 24678
-  }
+  // Determine whether the WS server shares the main HTTP server.
+  // This mirrors the logic in ws.ts `portsAreCompatible`:
+  // the WS piggybacks on the main server when no explicit ws.port is set
+  // or when ws.port matches server.port (and no custom ws server is specified).
+  const wsPortExplicit = !!wsConfig?.port
+  const wsPortMatchesServerPort =
+    wsConfig?.port === config.server.port && !isWsServerSpecified
 
-  let directTarget = wsConfig?.host || resolvedServerHostname
-  directTarget += `:${wsConfig?.port || resolvedServerPort}`
-  directTarget += devBase
+  return (code) => {
+    // Read the port lazily — by the time the client entry is transformed,
+    // the HTTP server has started listening and config.server.port has been
+    // updated to the actual bound port (which may differ from the original
+    // config value when server.port is 0 or the port was auto-incremented).
+    const resolvedServerPort = config.server.port!
 
-  let hmrBase = devBase
-  if (wsConfig?.path) {
-    hmrBase = path.posix.join(hmrBase, wsConfig.path)
-  }
+    const serverHost = `${resolvedServerHostname}:${resolvedServerPort}${devBase}`
 
-  const modeReplacement = escapeReplacement(config.mode)
-  const baseReplacement = escapeReplacement(devBase)
-  const serverHostReplacement = escapeReplacement(serverHost)
-  const hmrProtocolReplacement = escapeReplacement(protocol)
-  const hmrHostnameReplacement = escapeReplacement(host)
-  const hmrPortReplacement = escapeReplacement(port)
-  const hmrDirectTargetReplacement = escapeReplacement(directTarget)
-  const hmrBaseReplacement = escapeReplacement(hmrBase)
-  const hmrTimeoutReplacement = escapeReplacement(timeout)
-  const hmrEnableOverlayReplacement = escapeReplacement(overlay)
-  const hmrConfigNameReplacement = escapeReplacement(hmrConfigName)
-  const wsTokenReplacement = escapeReplacement(config.webSocketToken)
-  const serverForwardConsoleReplacement = escapeReplacement(
-    config.server.forwardConsole as any,
-  )
-  const bundleDevReplacement = escapeReplacement(
-    config.experimental.bundledDev || false,
-  )
+    // ws.clientPort -> ws.port
+    // -> (24678 if middleware mode and WS server is not specified) -> new URL(import.meta.url).port
+    //
+    // When the WS shares the main HTTP server (no explicit ws.port, or
+    // ws.port matches server.port), emit null so the client falls back to
+    // importMetaUrl.port — this always reflects the real listening port.
+    let port: number | null
+    if (wsConfig?.clientPort != null) {
+      port = wsConfig.clientPort
+    } else if (wsPortExplicit && !wsPortMatchesServerPort) {
+      // WS has its own dedicated port, different from the HTTP server
+      port = wsConfig!.port!
+    } else {
+      port = null
+    }
+    if (config.server.middlewareMode && !isWsServerSpecified) {
+      port ||= 24678
+    }
 
-  return (code) =>
-    code
+    // directTarget is used as a fallback connection when the primary
+    // connection fails. Use the resolved (post-listen) server port when
+    // the WS shares the HTTP server, so the fallback points to the real
+    // listening address.
+    const directTargetPort =
+      wsConfig?.port && !wsPortMatchesServerPort
+        ? wsConfig.port
+        : resolvedServerPort
+    let directTarget = wsConfig?.host || resolvedServerHostname
+    directTarget += `:${directTargetPort}`
+    directTarget += devBase
+
+    let hmrBase = devBase
+    if (wsConfig?.path) {
+      hmrBase = path.posix.join(hmrBase, wsConfig.path)
+    }
+
+    const modeReplacement = escapeReplacement(config.mode)
+    const baseReplacement = escapeReplacement(devBase)
+    const serverHostReplacement = escapeReplacement(serverHost)
+    const hmrProtocolReplacement = escapeReplacement(protocol)
+    const hmrHostnameReplacement = escapeReplacement(host)
+    const hmrPortReplacement = escapeReplacement(port)
+    const hmrDirectTargetReplacement = escapeReplacement(directTarget)
+    const hmrBaseReplacement = escapeReplacement(hmrBase)
+    const hmrTimeoutReplacement = escapeReplacement(timeout)
+    const hmrEnableOverlayReplacement = escapeReplacement(overlay)
+    const hmrConfigNameReplacement = escapeReplacement(hmrConfigName)
+    const wsTokenReplacement = escapeReplacement(config.webSocketToken)
+    const serverForwardConsoleReplacement = escapeReplacement(
+      config.server.forwardConsole as any,
+    )
+    const bundleDevReplacement = escapeReplacement(
+      config.experimental.bundledDev || false,
+    )
+
+    return code
       .replace(`__MODE__`, modeReplacement)
       .replace(/__BASE__/g, baseReplacement)
       .replace(`__SERVER_HOST__`, serverHostReplacement)
@@ -139,6 +172,7 @@ async function createClientConfigValueReplacer(
       .replace(`__WS_TOKEN__`, wsTokenReplacement)
       .replace(`__SERVER_FORWARD_CONSOLE__`, serverForwardConsoleReplacement)
       .replaceAll(`__BUNDLED_DEV__`, bundleDevReplacement)
+  }
 }
 
 export async function getHmrImplementation(
